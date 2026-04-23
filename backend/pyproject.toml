@@ -1,0 +1,25 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Django REST API for querying Azure DevOps Work Items with advanced filtering, automatic area path scoping, and comprehensive WIQL support"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [
+    { name = "Global Cloud Dashboard Team" }
+]
+keywords = ["azure-devops", "django", "rest-api", "work-items", "wiql"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Django :: 6.0",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "azure-devops==7.1.0b4",
+    "django==6.0.4",
+    "django-cors-headers==4.9.0",
+    "djangorestframework==3.17.1",
+    "pre-commit==4.6.0",
+    "python-dotenv==1.2.2",
+]
