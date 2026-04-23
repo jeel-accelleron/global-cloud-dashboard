@@ -19,7 +19,13 @@ from typing import Any, Dict, Generator, List, Optional
 from pydantic import BaseModel, Field
 
 from .azure_devops_service import AzureDevOpsService
-from .utils.constants import DEFAULT_AREA_PATH, DEFAULT_PROJECT
+from .utils.constants import (
+    DEFAULT_AREA_PATH,
+    DEFAULT_PROJECT,
+    WIQL_BASE_SELECT,
+    WIQL_FROM,
+    get_base_wiql_condition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,16 +65,63 @@ class _AsyncRunner:
 class QueryWorkItemsParams(BaseModel):
     work_item_type: Optional[str] = Field(
         default=None,
-        description="Type filter: Bug, Task, User Story, Feature, Epic, Issue.",
+        description="Single type filter: Bug, Task, User Story, Feature, Epic, Issue.",
+    )
+    work_item_types: Optional[List[str]] = Field(
+        default=None,
+        description="Multiple types (OR). Use this OR work_item_type, not both.",
     )
     state: Optional[str] = Field(
         default=None,
-        description="State filter: New, Active, Resolved, Closed, Removed.",
+        description="Single state filter: New, Active, Resolved, Closed, Removed, Done, In Progress.",
+    )
+    state_in: Optional[List[str]] = Field(
+        default=None,
+        description="States to include (OR). Example: ['Active','New','In Progress'].",
+    )
+    state_not_in: Optional[List[str]] = Field(
+        default=None,
+        description="States to exclude. Example: ['Closed','Resolved','Done','Removed'] for 'open items'.",
     )
     assigned_to: Optional[str] = Field(
-        default=None, description="User email or display name."
+        default=None, description="Single user email or display name."
     )
-    top: int = Field(default=50, description="Max number of results (1-200).")
+    assigned_to_in: Optional[List[str]] = Field(
+        default=None, description="Multiple assignees (OR)."
+    )
+    unassigned: Optional[bool] = Field(
+        default=None, description="If true, only items with no assignee."
+    )
+    priority_in: Optional[List[int]] = Field(
+        default=None, description="Priority values to include (1=highest, 4=lowest)."
+    )
+    tags_contains: Optional[List[str]] = Field(
+        default=None, description="Items whose tags contain ANY of these values."
+    )
+    iteration_path: Optional[str] = Field(
+        default=None, description="Iteration path (UNDER match), e.g. sprint name."
+    )
+    due_before: Optional[str] = Field(
+        default=None,
+        description="DueDate strictly before this date (YYYY-MM-DD). Use '@today' for today.",
+    )
+    due_after: Optional[str] = Field(
+        default=None,
+        description="DueDate strictly after this date (YYYY-MM-DD).",
+    )
+    changed_after: Optional[str] = Field(
+        default=None,
+        description="Items changed on or after this date (YYYY-MM-DD).",
+    )
+    created_after: Optional[str] = Field(
+        default=None,
+        description="Items created on or after this date (YYYY-MM-DD).",
+    )
+    order_by: Optional[str] = Field(
+        default="changed",
+        description="Sort: 'changed' (default), 'created', 'due', 'priority', 'id'.",
+    )
+    top: int = Field(default=50, description="Max results (1-200).")
 
 
 class SearchWorkItemsParams(BaseModel):
@@ -98,6 +151,25 @@ class WorkItemSummaryParams(BaseModel):
         default="state",
         description="Group counts by: 'state', 'type', or 'assignee'.",
     )
+
+
+class GetWorkItemDetailsParams(BaseModel):
+    ids: List[int] = Field(
+        description=(
+            "Work item IDs to fetch full details for. Pick these from a "
+            "previous list/search result. Max 10 per call."
+        )
+    )
+
+
+class FindOverdueParams(BaseModel):
+    work_item_type: Optional[str] = Field(
+        default=None, description="Optional type filter (Bug, Task, User Story, ...)."
+    )
+    assigned_to: Optional[str] = Field(
+        default=None, description="Optional assignee filter."
+    )
+    top: int = Field(default=50, description="Max results (1-200).")
 
 
 class CopilotChatService:
@@ -137,6 +209,110 @@ class CopilotChatService:
         ado = self._ado
         define_tool = self._define_tool
 
+        # ---- WIQL helpers --------------------------------------------------
+
+        def _q(value: str) -> str:
+            """Escape a string for safe inclusion in a single-quoted WIQL literal."""
+            return str(value).replace("'", "''")
+
+        def _date_or_macro(value: str) -> str:
+            v = (value or "").strip()
+            if not v:
+                return ""
+            if v.lower() in ("@today", "today"):
+                return "@Today"
+            # WIQL date literal
+            return f"'{_q(v)}'"
+
+        ORDER_FIELDS = {
+            "changed": "[System.ChangedDate] DESC",
+            "created": "[System.CreatedDate] DESC",
+            "due": "[Microsoft.VSTS.Scheduling.DueDate] ASC",
+            "priority": "[Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC",
+            "id": "[System.Id] ASC",
+        }
+
+        def _build_query_wiql(p: "QueryWorkItemsParams") -> str:
+            parts: List[str] = [
+                WIQL_BASE_SELECT,
+                WIQL_FROM,
+                f"WHERE {get_base_wiql_condition()}",
+            ]
+            # Type
+            types = list(p.work_item_types or [])
+            if p.work_item_type:
+                types.append(p.work_item_type)
+            if types:
+                ors = " OR ".join(
+                    f"[System.WorkItemType] = '{_q(t)}'" for t in types
+                )
+                parts.append(f"AND ({ors})")
+            # State
+            states_in = list(p.state_in or [])
+            if p.state:
+                states_in.append(p.state)
+            if states_in:
+                ors = " OR ".join(
+                    f"[System.State] = '{_q(s)}'" for s in states_in
+                )
+                parts.append(f"AND ({ors})")
+            if p.state_not_in:
+                ands = " AND ".join(
+                    f"[System.State] <> '{_q(s)}'" for s in p.state_not_in
+                )
+                parts.append(f"AND ({ands})")
+            # Assignee
+            assignees = list(p.assigned_to_in or [])
+            if p.assigned_to:
+                assignees.append(p.assigned_to)
+            if assignees:
+                ors = " OR ".join(
+                    f"[System.AssignedTo] = '{_q(a)}'" for a in assignees
+                )
+                parts.append(f"AND ({ors})")
+            if p.unassigned:
+                parts.append("AND [System.AssignedTo] = ''")
+            # Priority
+            if p.priority_in:
+                ors = " OR ".join(
+                    f"[Microsoft.VSTS.Common.Priority] = {int(v)}"
+                    for v in p.priority_in
+                )
+                parts.append(f"AND ({ors})")
+            # Tags
+            if p.tags_contains:
+                ors = " OR ".join(
+                    f"[System.Tags] CONTAINS '{_q(t)}'" for t in p.tags_contains
+                )
+                parts.append(f"AND ({ors})")
+            # Iteration
+            if p.iteration_path:
+                parts.append(
+                    f"AND [System.IterationPath] UNDER '{_q(p.iteration_path)}'"
+                )
+            # Dates
+            if p.due_before:
+                parts.append(
+                    f"AND [Microsoft.VSTS.Scheduling.DueDate] < {_date_or_macro(p.due_before)}"
+                )
+            if p.due_after:
+                parts.append(
+                    f"AND [Microsoft.VSTS.Scheduling.DueDate] > {_date_or_macro(p.due_after)}"
+                )
+            if p.changed_after:
+                parts.append(
+                    f"AND [System.ChangedDate] >= {_date_or_macro(p.changed_after)}"
+                )
+            if p.created_after:
+                parts.append(
+                    f"AND [System.CreatedDate] >= {_date_or_macro(p.created_after)}"
+                )
+            order = ORDER_FIELDS.get(
+                (p.order_by or "changed").lower(), ORDER_FIELDS["changed"]
+            )
+            parts.append(f"ORDER BY {order}")
+            return " ".join(parts)
+
         def _format(items: List[Dict]) -> str:
             if not items:
                 return "No work items found matching the criteria."
@@ -151,32 +327,48 @@ class CopilotChatService:
                     assignee = assignee.get("displayName") or assignee.get(
                         "uniqueName"
                     )
+                # Azure DevOps stores planned dates under Microsoft.VSTS.Scheduling.*
+                due = (
+                    fields.get("Microsoft.VSTS.Scheduling.DueDate")
+                    or fields.get("Microsoft.VSTS.Scheduling.TargetDate")
+                    or fields.get("Microsoft.VSTS.Scheduling.FinishDate")
+                )
                 rows.append({
                     "id": item.get("id"),
                     "type": fields.get("System.WorkItemType"),
                     "state": fields.get("System.State"),
                     "title": (fields.get("System.Title") or "")[:120],
                     "assigned_to": assignee or "Unassigned",
+                    "priority": fields.get("Microsoft.VSTS.Common.Priority"),
+                    "start_date": (
+                        fields.get("Microsoft.VSTS.Scheduling.StartDate") or ""
+                    )[:10],
+                    "due_date": (due or "")[:10],
                     "changed": (fields.get("System.ChangedDate") or "")[:10],
+                    "tags": fields.get("System.Tags") or "",
                 })
             payload = {"count": len(items), "showing": len(rows), "items": rows}
             return json.dumps(payload, default=str, separators=(",", ":"))
 
         @define_tool(
             description=(
-                "Query Azure DevOps work items with filters. Results are "
-                f"automatically scoped to project '{DEFAULT_PROJECT}' and area "
-                f"path '{DEFAULT_AREA_PATH}'."
+                "Query Azure DevOps work items with rich filters (type, "
+                "state include/exclude, assignee, priority, tags, iteration, "
+                "due_before/due_after, changed_after, created_after, order_by). "
+                "Always scoped to project "
+                f"'{DEFAULT_PROJECT}' and area path '{DEFAULT_AREA_PATH}'. "
+                "Use state_not_in=['Closed','Resolved','Done','Removed'] for "
+                "'open items'. Use due_before='@today' + the same state_not_in "
+                "for 'overdue items' (or call find_overdue_work_items)."
             ),
             skip_permission=True,
         )
         def query_work_items(params: QueryWorkItemsParams) -> str:
             try:
-                items = ado.get_work_items_by_type(
-                    work_item_type=params.work_item_type,
-                    state=params.state,
-                    assigned_to=params.assigned_to,
-                    top=min(max(params.top, 1), 200),
+                wiql = _build_query_wiql(params)
+                logger.info("query_work_items WIQL: %s", wiql)
+                items = ado.query_work_items(
+                    wiql_query=wiql, top=min(max(params.top, 1), 200)
                 )
                 return _format(items)
             except Exception as exc:  # noqa: BLE001
@@ -262,11 +454,95 @@ class CopilotChatService:
                 logger.exception("get_work_item_summary failed")
                 return f"Error generating summary: {exc}"
 
+        @define_tool(
+            description=(
+                "Find OVERDUE work items: DueDate is in the past AND state is "
+                "NOT one of (Closed, Resolved, Done, Removed). Use this for "
+                "'tasks whose finish date has passed but are not done', "
+                "'overdue items', 'late tasks'. Optional filters: "
+                "work_item_type, assigned_to."
+            ),
+            skip_permission=True,
+        )
+        def find_overdue_work_items(params: FindOverdueParams) -> str:
+            try:
+                parts: List[str] = [
+                    WIQL_BASE_SELECT,
+                    WIQL_FROM,
+                    f"WHERE {get_base_wiql_condition()}",
+                    "AND [Microsoft.VSTS.Scheduling.DueDate] < @Today",
+                    "AND [System.State] <> 'Closed'",
+                    "AND [System.State] <> 'Resolved'",
+                    "AND [System.State] <> 'Done'",
+                    "AND [System.State] <> 'Removed'",
+                ]
+                if params.work_item_type:
+                    parts.append(
+                        f"AND [System.WorkItemType] = '{_q(params.work_item_type)}'"
+                    )
+                if params.assigned_to:
+                    parts.append(
+                        f"AND [System.AssignedTo] = '{_q(params.assigned_to)}'"
+                    )
+                parts.append(
+                    "ORDER BY [Microsoft.VSTS.Scheduling.DueDate] ASC"
+                )
+                wiql = " ".join(parts)
+                logger.info("find_overdue WIQL: %s", wiql)
+                items = ado.query_work_items(
+                    wiql_query=wiql, top=min(max(params.top, 1), 200)
+                )
+                return _format(items)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("find_overdue_work_items failed")
+                return f"Error finding overdue items: {exc}"
+
+        @define_tool(
+            description=(
+                "Fetch ALL fields for one or more work items by ID. Use this "
+                "after a list/search when you need attributes that aren't in "
+                "the compact list (e.g. Description, AcceptanceCriteria, "
+                "Iteration, Effort, Severity, Reason, history dates, custom "
+                "fields). Limit to <=10 IDs per call."
+            ),
+            skip_permission=True,
+        )
+        def get_work_item_details(params: GetWorkItemDetailsParams) -> str:
+            try:
+                ids = list(params.ids)[:10]
+                if not ids:
+                    return "No IDs provided."
+                items = ado.get_work_items_by_ids(ids)
+                # Flatten and slim each item: keep id + every field, but
+                # collapse identity dicts to display names and trim long
+                # HTML descriptions so the payload stays small.
+                slim: List[Dict[str, Any]] = []
+                for item in items:
+                    fields = item.get("fields", {}) if isinstance(item, dict) else {}
+                    flat: Dict[str, Any] = {"id": item.get("id")}
+                    for key, value in fields.items():
+                        if isinstance(value, dict):
+                            value = (
+                                value.get("displayName")
+                                or value.get("uniqueName")
+                                or value
+                            )
+                        if isinstance(value, str) and len(value) > 800:
+                            value = value[:800] + "\u2026"
+                        flat[key] = value
+                    slim.append(flat)
+                return json.dumps(slim, default=str, separators=(",", ":"))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("get_work_item_details failed")
+                return f"Error fetching work item details: {exc}"
+
         return [
             query_work_items,
             search_work_items,
             get_recent_updates,
             get_work_item_summary,
+            find_overdue_work_items,
+            get_work_item_details,
         ]
 
     async def _get_client(self):
@@ -277,19 +553,48 @@ class CopilotChatService:
 
     @staticmethod
     def _system_message() -> str:
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         return (
             "You are an Azure DevOps Work Items assistant for the "
-            f"'{DEFAULT_PROJECT}' project, scoped to the "
-            f"'{DEFAULT_AREA_PATH}' area path. Use the provided tools to "
-            "answer questions about bugs, tasks, user stories, features and "
-            "their states. Today's date is "
-            f"{datetime.utcnow().strftime('%Y-%m-%d')}. When the user asks "
-            "about 'today', 'last week', 'this month', etc., translate that "
-            "into the days_ago parameter for get_recent_updates. For "
-            "'completed' work items, treat that as state='Closed' or "
-            "state='Resolved'. Reply in concise natural language and "
-            "summarise results; do not dump raw JSON unless explicitly "
-            "requested."
+            f"'{DEFAULT_PROJECT}' project, scoped to the area path "
+            f"'{DEFAULT_AREA_PATH}'. Today's date is {today}.\n\n"
+            "## Tools\n"
+            "- query_work_items: rich filters (state_in, state_not_in, "
+            "assigned_to_in, priority_in, tags_contains, iteration_path, "
+            "due_before, due_after, changed_after, created_after, order_by, "
+            "top). PREFER pushing filters into this tool over post-filtering.\n"
+            "- find_overdue_work_items: shortcut for items past their due "
+            "date and not closed. Use whenever the user asks about overdue / "
+            "late / 'finish date passed but not done' items.\n"
+            "- search_work_items: keyword search in titles only.\n"
+            "- get_recent_updates: items changed in the last N days.\n"
+            "- get_work_item_summary: counts grouped by state/type/assignee.\n"
+            "- get_work_item_details(ids): full fields (Description, "
+            "AcceptanceCriteria, Iteration, Effort, Severity, Reason, "
+            "custom fields). Call this when the user wants details, "
+            "description, history, or any field beyond the compact list.\n\n"
+            "## Compact list schema (returned by list/search tools)\n"
+            "id, type, state, title, assigned_to, priority, start_date, "
+            "due_date, changed, tags. The payload also has count vs showing; "
+            "if count > showing, mention 'showing first N of M'.\n\n"
+            "## Vocabulary\n"
+            "- 'open' / 'not done' = state_not_in=['Closed','Resolved','Done','Removed']\n"
+            "- 'completed' / 'done' / 'finished' = state_in=['Closed','Resolved','Done']\n"
+            "- 'high priority' = priority_in=[1,2]\n"
+            "- 'this week' = changed_after = (today - 7 days)\n"
+            "- 'overdue' = call find_overdue_work_items\n\n"
+            "## Response style (Markdown)\n"
+            "1. Start with a one-sentence summary (e.g. **5 overdue tasks**).\n"
+            "2. If >3 items: render a Markdown table with columns "
+            "`ID | Title | State | Assignee | Due`. Bold the ID.\n"
+            "3. If \u22643 items: use a bullet list with **Title** then state, "
+            "assignee, due_date.\n"
+            "4. If the user asks for details on a specific item, fetch via "
+            "get_work_item_details and use clear sub-headings (## Title, "
+            "**State**, **Description**, **Acceptance Criteria**, etc.).\n"
+            "5. Never dump raw JSON. Never invent fields you didn't see.\n"
+            "6. If a tool returns zero items, say so plainly and suggest one "
+            "concrete refinement."
         )
 
     async def _get_session(self, session_id: str):

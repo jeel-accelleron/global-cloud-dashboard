@@ -259,7 +259,90 @@
             color: #721c24 !important;
             border-color: #f5c6cb !important;
         }
+
+        /* Markdown formatting inside assistant bubbles */
+        .assistant .message-bubble p { margin: 0 0 8px 0; }
+        .assistant .message-bubble p:last-child { margin-bottom: 0; }
+        .assistant .message-bubble h1,
+        .assistant .message-bubble h2,
+        .assistant .message-bubble h3,
+        .assistant .message-bubble h4 {
+            margin: 12px 0 6px 0;
+            font-weight: 600;
+            color: #2d2d44;
+        }
+        .assistant .message-bubble h1 { font-size: 18px; }
+        .assistant .message-bubble h2 { font-size: 17px; }
+        .assistant .message-bubble h3 { font-size: 16px; }
+        .assistant .message-bubble h4 { font-size: 15px; }
+        .assistant .message-bubble strong { color: #2d2d44; font-weight: 600; }
+        .assistant .message-bubble em { color: #555; }
+        .assistant .message-bubble ul,
+        .assistant .message-bubble ol {
+            margin: 4px 0 8px 0;
+            padding-left: 22px;
+        }
+        .assistant .message-bubble li { margin: 2px 0; }
+        .assistant .message-bubble li > p { margin: 0; }
+        .assistant .message-bubble code {
+            background: #f1f1f7;
+            color: #c7254e;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+            font-size: 13px;
+        }
+        .assistant .message-bubble pre {
+            background: #1e1e2e;
+            color: #f8f8f2;
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 8px 0;
+        }
+        .assistant .message-bubble pre code {
+            background: transparent;
+            color: inherit;
+            padding: 0;
+            font-size: 13px;
+        }
+        .assistant .message-bubble a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        .assistant .message-bubble a:hover { text-decoration: underline; }
+        .assistant .message-bubble blockquote {
+            border-left: 3px solid #667eea;
+            margin: 8px 0;
+            padding: 4px 12px;
+            color: #555;
+            background: #f8f8fc;
+            border-radius: 0 6px 6px 0;
+        }
+        .assistant .message-bubble table {
+            border-collapse: collapse;
+            margin: 8px 0;
+            width: 100%;
+            font-size: 13px;
+        }
+        .assistant .message-bubble th,
+        .assistant .message-bubble td {
+            border: 1px solid #e0e0e0;
+            padding: 6px 10px;
+            text-align: left;
+        }
+        .assistant .message-bubble th {
+            background: #f5f5fa;
+            font-weight: 600;
+        }
+        .assistant .message-bubble hr {
+            border: none;
+            border-top: 1px solid #e0e0e0;
+            margin: 10px 0;
+        }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -304,23 +387,41 @@
         let sessionId = 'user-' + Math.random().toString(36).substr(2, 9);
         let isProcessing = false;
 
+        if (window.marked) {
+            marked.setOptions({ breaks: true, gfm: true });
+        }
+
+        function renderMarkdown(text) {
+            if (!window.marked || !window.DOMPurify) {
+                return text.replace(/[&<>]/g, c => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;'
+                }[c])).replace(/\n/g, '<br>');
+            }
+            return DOMPurify.sanitize(marked.parse(text || ''));
+        }
+
         function addMessage(content, role) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}`;
-            
+
             const avatar = document.createElement('div');
             avatar.className = 'avatar';
             avatar.textContent = role === 'user' ? '👤' : '🤖';
-            
+
             const bubble = document.createElement('div');
             bubble.className = 'message-bubble';
-            bubble.textContent = content;
-            
+            if (role === 'assistant') {
+                bubble.dataset.raw = content || '';
+                bubble.innerHTML = renderMarkdown(content || '');
+            } else {
+                bubble.textContent = content;
+            }
+
             messageDiv.appendChild(avatar);
             messageDiv.appendChild(bubble);
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
-            
+
             return bubble;
         }
 
@@ -397,10 +498,12 @@
                                 const data = JSON.parse(line.substring(6));
                                 
                                 if (data.content) {
-                                    assistantBubble.textContent += data.content;
+                                    const raw = (assistantBubble.dataset.raw || '') + data.content;
+                                    assistantBubble.dataset.raw = raw;
+                                    assistantBubble.innerHTML = renderMarkdown(raw);
                                     chatContainer.scrollTop = chatContainer.scrollHeight;
                                 }
-                                
+
                                 if (data.error) {
                                     assistantBubble.textContent = '❌ Error: ' + data.error;
                                     assistantBubble.classList.add('error-message');
