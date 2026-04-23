@@ -147,6 +147,12 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
 ]
 
+# Allow file:// (Origin: null) and other origins in dev so the chat_demo.html
+# can be opened directly from disk during development.
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ALLOWED_ORIGIN_REGEXES = [r"^null$"]
+
 CORS_ALLOW_CREDENTIALS = True
 
 # Azure DevOps Configuration

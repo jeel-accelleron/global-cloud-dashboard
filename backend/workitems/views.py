@@ -7,9 +7,13 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+from django.http import StreamingHttpResponse
+from django.utils import timezone
 import logging
+import json
 
 from .azure_devops_service import AzureDevOpsService
+from .copilot_chat_service import CopilotChatService
 from .serializers import (
     WorkItemSerializer,
     WorkItemQuerySerializer,
@@ -278,4 +282,123 @@ def health_check(request):
             'message': 'Failed to connect to Azure DevOps',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+def copilot_chat(request):
+    """
+    Chat endpoint using GitHub Copilot SDK (non-streaming)
+    
+    POST /api/workitems/copilot/chat/
+    Body:
+        {
+            "message": "Show me active bugs",
+            "session_id": "optional-session-id"
+        }
+    """
+    user_message = request.data.get('message')
+    session_id = request.data.get('session_id', 'default')
+    
+    if not user_message:
+        return Response({'error': 'message is required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        chat_service = CopilotChatService.get_instance()
+        result = chat_service.chat(message=user_message, session_id=session_id)
+
+        return Response({
+            'response': result['message'],
+            'session_id': result['session_id'],
+            'model': result['model'],
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_200_OK)
+    
+    except ImportError as e:
+        return Response({
+            'error': 'GitHub Copilot SDK not installed',
+            'detail': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    except ValueError as e:
+        return Response({
+            'error': 'Configuration error',
+            'detail': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    except Exception as e:
+        logger.error(f"Error in copilot_chat: {str(e)}")
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+def copilot_chat_stream(request):
+    """
+    Streaming chat endpoint using GitHub Copilot SDK
+    Returns Server-Sent Events (SSE) stream
+    
+    POST /api/workitems/copilot/chat/stream/
+    Body:
+        {
+            "message": "Show me active bugs",
+            "session_id": "optional-session-id"
+        }
+    """
+    user_message = request.data.get('message')
+    session_id = request.data.get('session_id', 'default')
+    
+    if not user_message:
+        return Response({'error': 'message is required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    def event_stream():
+        """Generator for SSE events"""
+        try:
+            chat_service = CopilotChatService.get_instance()
+            for chunk in chat_service.chat_stream(
+                message=user_message, session_id=session_id
+            ):
+                yield chunk
+        except Exception as e:
+            logger.error(f"Error in copilot_chat_stream: {str(e)}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    
+    response = StreamingHttpResponse(
+        event_stream(),
+        content_type='text/event-stream'
+    )
+    response['Cache-Control'] = 'no-cache'
+    response['X-Accel-Buffering'] = 'no'
+    return response
+
+
+@api_view(['POST'])
+def clear_chat_session(request):
+    """
+    Clear conversation history for a session
+    
+    POST /api/workitems/copilot/chat/clear/
+    Body:
+        {
+            "session_id": "session-id-to-clear"
+        }
+    """
+    session_id = request.data.get('session_id', 'default')
+    
+    try:
+        chat_service = CopilotChatService.get_instance()
+        chat_service.clear_session(session_id)
+        
+        return Response({
+            'message': f'Session {session_id} cleared',
+            'session_id': session_id
+        }, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error(f"Error in clear_chat_session: {str(e)}")
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
