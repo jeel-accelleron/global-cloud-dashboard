@@ -22,10 +22,13 @@ export function useWorkItems(filters: WorkItemFilters = {}) {
     }
   }, []);
 
+  // Serialize filters to a primitive so the dependency array stays stable
+  // even when callers pass a new object literal each render. This keeps
+  // react-hooks/exhaustive-deps satisfied without disabling the rule.
+  const filtersKey = JSON.stringify(filters);
   useEffect(() => {
     refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(filters)]);
+  }, [filtersKey, refetch]);
 
   return { data, loading, error, refetch };
 }

@@ -380,6 +380,7 @@ def health_check(request):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@csrf_exempt
 @api_view(['POST'])
 def copilot_chat(request):
     """
@@ -431,6 +432,7 @@ def copilot_chat(request):
         )
 
 
+@csrf_exempt
 @api_view(['POST'])
 def copilot_chat_stream(request):
     """
@@ -475,6 +477,7 @@ def copilot_chat_stream(request):
     return response
 
 
+@csrf_exempt
 @api_view(['POST'])
 def clear_chat_session(request):
     """

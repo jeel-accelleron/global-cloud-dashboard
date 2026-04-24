@@ -77,23 +77,23 @@ export function DataTable<T>({
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted/40 text-left text-xs uppercase tracking-wide text-subtle">
-              {columns.map((c) => (
-                <th
-                  key={c.key}
-                  style={c.width ? { width: c.width } : undefined}
-                  className={cn(
-                    'px-4 py-2.5 font-medium',
-                    c.sortable && 'cursor-pointer select-none hover:text-fg',
-                    c.className
-                  )}
-                  onClick={() => c.sortable && toggleSort(c.key)}
-                >
-                  <div className="inline-flex items-center gap-1">
+              {columns.map((c) => {
+                const isActive = sort?.key === c.key;
+                const ariaSort: 'ascending' | 'descending' | 'none' | undefined =
+                  c.sortable
+                    ? isActive
+                      ? sort!.dir === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                    : undefined;
+                const inner = (
+                  <span className="inline-flex items-center gap-1">
                     {c.header}
                     {c.sortable && (
                       <span className="text-subtle">
-                        {sort?.key === c.key ? (
-                          sort.dir === 'asc' ? (
+                        {isActive ? (
+                          sort!.dir === 'asc' ? (
                             <ChevronUp size={12} />
                           ) : (
                             <ChevronDown size={12} />
@@ -103,9 +103,29 @@ export function DataTable<T>({
                         )}
                       </span>
                     )}
-                  </div>
-                </th>
-              ))}
+                  </span>
+                );
+                return (
+                  <th
+                    key={c.key}
+                    style={c.width ? { width: c.width } : undefined}
+                    aria-sort={ariaSort}
+                    className={cn('px-4 py-2.5 font-medium', c.className)}
+                  >
+                    {c.sortable ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(c.key)}
+                        className="inline-flex items-center gap-1 select-none hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                      >
+                        {inner}
+                      </button>
+                    ) : (
+                      inner
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>

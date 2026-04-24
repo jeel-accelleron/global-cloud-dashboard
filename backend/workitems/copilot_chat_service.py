@@ -12,7 +12,9 @@ import asyncio
 import json
 import logging
 import os
+import queue
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Generator, List, Optional
 
@@ -32,6 +34,13 @@ logger = logging.getLogger(__name__)
 # Default model. gpt-4.1 is free with a Copilot subscription (multiplier 0.0).
 DEFAULT_MODEL = os.getenv("COPILOT_MODEL", "gpt-4.1")
 
+# Hard timeout (seconds) for a single Copilot SDK call so Django request
+# threads can't hang indefinitely if the upstream stalls.
+COPILOT_CHAT_TIMEOUT = float(os.getenv("COPILOT_CHAT_TIMEOUT", "120"))
+# Heartbeat interval (seconds) for SSE streaming so proxies don't time out
+# while we wait for the SDK response.
+COPILOT_STREAM_HEARTBEAT = float(os.getenv("COPILOT_STREAM_HEARTBEAT", "15"))
+
 
 class _AsyncRunner:
     """Owns a long-lived asyncio loop running in a background thread."""
@@ -50,9 +59,20 @@ class _AsyncRunner:
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
-    def run(self, coro):
+    def run(self, coro, timeout: Optional[float] = COPILOT_CHAT_TIMEOUT):
+        """Schedule ``coro`` on the background loop and wait for its result.
+
+        A timeout is enforced so Django worker threads can't hang forever if
+        the SDK call stalls; on timeout we cancel the underlying task.
+        """
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        return future.result()
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            future.cancel()
+            raise TimeoutError(
+                f"Copilot SDK call timed out after {timeout}s"
+            )
 
     @classmethod
     def instance(cls) -> "_AsyncRunner":
@@ -672,22 +692,53 @@ class CopilotChatService:
     ) -> Generator[str, None, None]:
         """Yield the assistant reply as SSE chunks.
 
-        The Copilot SDK supports event streaming, but for this initial
-        integration we yield the final content as a single chunk so the
-        existing frontend keeps working.
+        The Copilot SDK doesn't expose token-level streaming yet, so we run
+        the blocking ``chat`` call in a worker thread and emit SSE comment
+        heartbeats while waiting. This keeps proxies from timing out and
+        gives the frontend a steady byte stream until the final content +
+        done events are flushed.
         """
-        try:
-            result = self.chat(message, session_id=session_id)
-            effective_session_id = result["session_id"]
-            yield (
-                f"data: {json.dumps({'content': result['message'], 'session_id': effective_session_id})}\n\n"
-            )
-            yield (
-                f"data: {json.dumps({'done': True, 'session_id': effective_session_id})}\n\n"
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("chat_stream failed")
-            yield f"data: {json.dumps({'error': str(exc), 'session_id': session_id})}\n\n"
+        result_q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+        def _worker() -> None:
+            try:
+                result_q.put(("ok", self.chat(message, session_id=session_id)))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("chat_stream worker failed")
+                result_q.put(("err", exc))
+
+        worker = threading.Thread(
+            target=_worker, name=f"copilot-chat-{session_id[:8]}", daemon=True
+        )
+        worker.start()
+
+        deadline = time.monotonic() + COPILOT_CHAT_TIMEOUT
+        while True:
+            try:
+                kind, payload = result_q.get(timeout=COPILOT_STREAM_HEARTBEAT)
+                break
+            except queue.Empty:
+                if time.monotonic() >= deadline:
+                    yield (
+                        f"data: {json.dumps({'error': 'Copilot SDK call timed out', 'session_id': session_id})}\n\n"
+                    )
+                    return
+                # SSE comment line — keeps the connection alive without
+                # being delivered as a message event to the client.
+                yield ": keep-alive\n\n"
+
+        if kind == "err":
+            yield f"data: {json.dumps({'error': str(payload), 'session_id': session_id})}\n\n"
+            return
+
+        result = payload
+        effective_session_id = result["session_id"]
+        yield (
+            f"data: {json.dumps({'content': result['message'], 'session_id': effective_session_id})}\n\n"
+        )
+        yield (
+            f"data: {json.dumps({'done': True, 'session_id': effective_session_id})}\n\n"
+        )
 
     def clear_session(self, session_id: str) -> None:
         # _clear_async takes _sessions_lock only for the pop().

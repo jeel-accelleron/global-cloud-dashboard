@@ -44,16 +44,37 @@ export default function AIChat() {
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Track message count so we can distinguish "new message appended" from
+  // "existing assistant message updated by streaming chunk".
+  const prevCountRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (sessionId) localStorage.setItem('chat.session', sessionId);
   }, [sessionId]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: 'smooth',
+    const el = scrollRef.current;
+    if (!el) return;
+    const isNewMessage = messages.length > prevCountRef.current;
+    prevCountRef.current = messages.length;
+    // Coalesce scroll updates to one per animation frame to avoid layout
+    // thrash when streaming chunks arrive rapidly. Use 'auto' for in-place
+    // streaming updates and 'smooth' only when a new message is appended.
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      el.scrollTo({
+        top: el.scrollHeight,
+        behavior: isNewMessage ? 'smooth' : 'auto',
+      });
+      rafRef.current = null;
     });
+    return () => {
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
   }, [messages]);
 
   const canSend = useMemo(
