@@ -8,6 +8,7 @@ from .views import (
     WorkItemSearchView,
     WorkItemUpdatedSinceView,
     CustomWIQLQueryView,
+    WorkItemHierarchyView,
     health_check,
     copilot_chat,
     copilot_chat_stream,
@@ -26,6 +27,7 @@ urlpatterns = [
     path('search/', WorkItemSearchView.as_view(), name='work-item-search'),
     path('updated-since/', WorkItemUpdatedSinceView.as_view(), name='work-item-updated-since'),
     path('query/', CustomWIQLQueryView.as_view(), name='custom-wiql-query'),
+    path('<int:work_item_id>/hierarchy/', WorkItemHierarchyView.as_view(), name='work-item-hierarchy'),
     
     # Copilot Chat endpoints
     path('copilot/chat/', copilot_chat, name='copilot-chat'),

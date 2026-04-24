@@ -261,6 +261,101 @@ class CustomWIQLQueryView(APIView):
             )
 
 
+@method_decorator(csrf_exempt, name='dispatch')
+class WorkItemHierarchyView(APIView):
+    """
+    API endpoint to get a work item plus all its descendants as a tree.
+
+    GET /api/workitems/<int:work_item_id>/hierarchy/
+    Query Parameters:
+        - max_depth: Maximum tree depth to walk (default 5, max 10)
+    """
+
+    CHILD_REL = 'System.LinkTypes.Hierarchy-Forward'
+
+    def get(self, request, work_item_id: int):
+        try:
+            try:
+                max_depth = int(request.query_params.get('max_depth', 5))
+            except (TypeError, ValueError):
+                max_depth = 5
+            max_depth = max(1, min(max_depth, 10))
+
+            ado_service = AzureDevOpsService()
+
+            # BFS through child relations, batching get_work_items per level
+            visited = set()
+            level_ids = [work_item_id]
+            id_to_item = {}
+
+            for _ in range(max_depth + 1):
+                fetch_ids = [wid for wid in level_ids if wid not in visited]
+                if not fetch_ids:
+                    break
+                # Azure DevOps caps batch size at 200
+                next_level = []
+                for i in range(0, len(fetch_ids), 200):
+                    batch = fetch_ids[i:i + 200]
+                    items = ado_service.get_work_items(ids=batch, expand='Relations')
+                    for it in items:
+                        wid = it.get('id')
+                        if wid is None or wid in visited:
+                            continue
+                        visited.add(wid)
+                        id_to_item[wid] = it
+                        for rel in it.get('relations') or []:
+                            if rel.get('rel') == self.CHILD_REL:
+                                url = rel.get('url') or ''
+                                # URL ends with the child id
+                                try:
+                                    child_id = int(url.rstrip('/').split('/')[-1])
+                                    if child_id not in visited:
+                                        next_level.append(child_id)
+                                except (ValueError, AttributeError):
+                                    continue
+                level_ids = next_level
+
+            if work_item_id not in id_to_item:
+                return Response(
+                    {'error': f'Work item {work_item_id} not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            def build_node(wid: int, depth: int):
+                item = id_to_item.get(wid)
+                if not item:
+                    return None
+                children = []
+                if depth < max_depth:
+                    for rel in item.get('relations') or []:
+                        if rel.get('rel') != self.CHILD_REL:
+                            continue
+                        url = rel.get('url') or ''
+                        try:
+                            cid = int(url.rstrip('/').split('/')[-1])
+                        except (ValueError, AttributeError):
+                            continue
+                        node = build_node(cid, depth + 1)
+                        if node:
+                            children.append(node)
+                # Sort children by work item type then id for stable display
+                children.sort(key=lambda n: (
+                    (n['item'].get('fields', {}) or {}).get('System.WorkItemType', ''),
+                    n['item'].get('id', 0),
+                ))
+                return {'item': item, 'children': children}
+
+            root = build_node(work_item_id, 0)
+            return Response(root, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Error in WorkItemHierarchyView: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch work item hierarchy', 'details': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 @api_view(['GET'])
 def health_check(request):
     """

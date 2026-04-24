@@ -121,9 +121,15 @@ class AzureDevOpsService:
             
             # Extract work item IDs from query result
             ids = [item.id for item in query_result.work_items]
-            
-            # Get full work item details
-            return self.get_work_items(ids=ids, expand='All')
+
+            # ADO get_work_items has a hard cap of 200 IDs per call.
+            # Batch to stay safely under it and merge results.
+            BATCH_SIZE = 200
+            results: List[Dict] = []
+            for i in range(0, len(ids), BATCH_SIZE):
+                batch = ids[i:i + BATCH_SIZE]
+                results.extend(self.get_work_items(ids=batch, expand='All'))
+            return results
         
         except Exception as e:
             logger.error(f"Error querying work items: {str(e)}")
@@ -189,14 +195,19 @@ class AzureDevOpsService:
     def get_work_items_by_ids(self, ids: List[int]) -> List[Dict]:
         """
         Get work items by specific IDs
-        
+
         Args:
             ids: List of work item IDs
-        
+
         Returns:
             List of work item dictionaries
         """
-        return self.get_work_items(ids=ids, expand='All')
+        BATCH_SIZE = 200
+        results: List[Dict] = []
+        for i in range(0, len(ids), BATCH_SIZE):
+            batch = ids[i:i + BATCH_SIZE]
+            results.extend(self.get_work_items(ids=batch, expand='All'))
+        return results
     
     def search_work_items(
         self,
