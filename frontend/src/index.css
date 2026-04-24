@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 247 248 251;
+  --surface: 255 255 255;
+  --elevated: 255 255 255;
+  --border: 229 231 239;
+  --muted: 241 243 248;
+  --fg: 17 24 39;
+  --subtle: 100 116 139;
+  --brand: 99 102 241;
+  --brand-fg: 255 255 255;
+  --success: 16 185 129;
+  --warning: 245 158 11;
+  --danger: 239 68 68;
+  --info: 59 130 246;
+}
+.dark {
+  --bg: 11 13 18;
+  --surface: 17 20 27;
+  --elevated: 22 26 34;
+  --border: 36 41 51;
+  --muted: 28 32 41;
+  --fg: 232 234 240;
+  --subtle: 148 163 184;
+  --brand: 129 140 248;
+  --brand-fg: 17 24 39;
+  --success: 52 211 153;
+  --warning: 251 191 36;
+  --danger: 248 113 113;
+  --info: 96 165 250;
+}
+
+html, body, #root { height: 100%; }
+body { font-family: 'Work Sans', ui-sans-serif, system-ui, sans-serif; }
+
+/* Scrollbar */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--border));
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgb(var(--subtle) / 0.5); }
+
+/* Markdown bubble */
+.md p { margin: 0 0 .5rem; }
+.md p:last-child { margin: 0; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: 600; margin: .75rem 0 .35rem; }
+.md h1 { font-size: 1.05rem; }
+.md h2 { font-size: 1rem; }
+.md h3 { font-size: .95rem; }
+.md ul, .md ol { padding-left: 1.25rem; margin: .25rem 0 .5rem; }
+.md li { margin: .15rem 0; }
+.md code {
+  background: rgb(var(--muted));
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: .85em;
+}
+.md pre {
+  background: rgb(var(--elevated));
+  border: 1px solid rgb(var(--border));
+  padding: .75rem;
+  border-radius: .75rem;
+  overflow-x: auto;
+}
+.md pre code { background: transparent; padding: 0; }
+.md table { width: 100%; border-collapse: collapse; font-size: .85rem; margin: .25rem 0; }
+.md th, .md td {
+  border: 1px solid rgb(var(--border));
+  padding: 6px 10px;
+  text-align: left;
+}
+.md th { background: rgb(var(--muted)); font-weight: 600; }
+.md a { color: rgb(var(--brand)); text-decoration: none; }
+.md a:hover { text-decoration: underline; }
+.md blockquote {
+  border-left: 3px solid rgb(var(--brand));
+  margin: .25rem 0;
+  padding: .15rem .75rem;
+  color: rgb(var(--subtle));
+  background: rgb(var(--muted));
+  border-radius: 0 .5rem .5rem 0;
+}
+
+/* Skeleton */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--muted)) 0%,
+    rgb(var(--border)) 50%,
+    rgb(var(--muted)) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: .5rem;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

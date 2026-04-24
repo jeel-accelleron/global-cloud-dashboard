@@ -14,7 +14,7 @@ DEFAULT_AREA_PATH = "Global IS Infrastructure\\Cloud"
 
 # Query limits
 DEFAULT_TOP_LIMIT = 200
-MAX_TOP_LIMIT = 1000
+MAX_TOP_LIMIT = 5000
 DEFAULT_SEARCH_LIMIT = 100
 
 # Common Work Item Types

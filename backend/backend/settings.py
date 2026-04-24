@@ -142,12 +142,22 @@ REST_FRAMEWORK = {
 }
 
 # CORS Configuration
+# Only allow credentialed cross-origin requests from explicit local dev origins.
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "http://localhost:5173",
     "http://localhost:8080",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8080",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
+
+# Allow file:// (Origin: null) for the chat_demo.html only when explicitly
+# enabled via env flag. Never enable this in production.
+if os.getenv('CORS_ALLOW_NULL_ORIGIN_DEMO', '').lower() in ('1', 'true', 'yes', 'on'):
+    CORS_ALLOWED_ORIGIN_REGEXES = [r"^null$"]
 
 # Azure DevOps Configuration
 AZURE_DEVOPS_ORG_URL = os.getenv('AZURE_DEVOPS_ORG_URL')
