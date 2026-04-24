@@ -26,8 +26,17 @@ function renderMarkdown(text: string): string {
 
 export default function AIChat() {
   const { push } = useToast();
-  const [sessionId, setSessionId] = useState<string | undefined>(() => {
-    return localStorage.getItem('chat.session') || undefined;
+  const [sessionId, setSessionId] = useState<string>(() => {
+    const existing = localStorage.getItem('chat.session');
+    if (existing) return existing;
+    // Mint a client-side session id up front so requests never share a
+    // backend default session across users / tabs.
+    const fresh =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `c-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem('chat.session', fresh);
+    return fresh;
   });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -132,6 +141,12 @@ export default function AIChat() {
     abortRef.current?.abort();
   }
 
+  function mintSessionId(): string {
+    return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `c-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
   async function handleClear() {
     if (sessionId) {
       try {
@@ -141,8 +156,9 @@ export default function AIChat() {
       }
     }
     setMessages([]);
-    setSessionId(undefined);
-    localStorage.removeItem('chat.session');
+    const fresh = mintSessionId();
+    setSessionId(fresh);
+    localStorage.setItem('chat.session', fresh);
     push('Conversation cleared', 'success');
   }
 

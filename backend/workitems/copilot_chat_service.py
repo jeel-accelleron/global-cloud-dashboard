@@ -598,9 +598,15 @@ class CopilotChatService:
         )
 
     async def _get_session(self, session_id: str):
-        if session_id in self._sessions:
-            return self._sessions[session_id]
+        # Fast path: existing session lookup is cheap; guard the dict only
+        # for the read so we don't race with concurrent create/remove.
+        with self._sessions_lock:
+            session = self._sessions.get(session_id)
+        if session is not None:
+            return session
 
+        # Create the session outside the lock — `create_session` performs
+        # network I/O and we don't want to serialize all chat traffic.
         client = await self._get_client()
 
         async def on_permission(_request):
@@ -612,8 +618,26 @@ class CopilotChatService:
             system_message={"content": self._system_message()},
             on_permission_request=on_permission,
         )
-        self._sessions[session_id] = session
-        return session
+
+        # Register the new session, but if a concurrent caller beat us to it
+        # keep the existing one and discard ours so we don't leak resources.
+        with self._sessions_lock:
+            existing = self._sessions.get(session_id)
+            if existing is not None:
+                session_to_return = existing
+                session_to_discard = session
+            else:
+                self._sessions[session_id] = session
+                session_to_return = session
+                session_to_discard = None
+
+        if session_to_discard is not None:
+            try:
+                await session_to_discard.disconnect()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to disconnect duplicate session")
+
+        return session_to_return
 
     async def _chat_async(self, session_id: str, message: str) -> str:
         session = await self._get_session(session_id)
@@ -624,7 +648,8 @@ class CopilotChatService:
         return content or "(empty response)"
 
     async def _clear_async(self, session_id: str) -> None:
-        session = self._sessions.pop(session_id, None)
+        with self._sessions_lock:
+            session = self._sessions.pop(session_id, None)
         if session is not None:
             try:
                 await session.disconnect()
@@ -632,8 +657,10 @@ class CopilotChatService:
                 logger.exception("Failed to disconnect session %s", session_id)
 
     def chat(self, message: str, session_id: str = "default") -> Dict[str, Any]:
-        with self._sessions_lock:
-            content = self._runner.run(self._chat_async(session_id, message))
+        # Lock is held only inside _get_session for the dict ops; the long
+        # send_and_wait call runs without holding _sessions_lock so other
+        # sessions and clear_session aren't blocked.
+        content = self._runner.run(self._chat_async(session_id, message))
         return {
             "session_id": session_id,
             "message": content,
@@ -651,12 +678,17 @@ class CopilotChatService:
         """
         try:
             result = self.chat(message, session_id=session_id)
-            yield f"data: {json.dumps({'content': result['message']})}\n\n"
-            yield f"data: {json.dumps({'done': True})}\n\n"
+            effective_session_id = result["session_id"]
+            yield (
+                f"data: {json.dumps({'content': result['message'], 'session_id': effective_session_id})}\n\n"
+            )
+            yield (
+                f"data: {json.dumps({'done': True, 'session_id': effective_session_id})}\n\n"
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("chat_stream failed")
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            yield f"data: {json.dumps({'error': str(exc), 'session_id': session_id})}\n\n"
 
     def clear_session(self, session_id: str) -> None:
-        with self._sessions_lock:
-            self._runner.run(self._clear_async(session_id))
+        # _clear_async takes _sessions_lock only for the pop().
+        self._runner.run(self._clear_async(session_id))

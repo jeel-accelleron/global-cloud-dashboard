@@ -11,6 +11,7 @@ from django.http import StreamingHttpResponse
 from django.utils import timezone
 import logging
 import json
+import uuid
 
 from .azure_devops_service import AzureDevOpsService
 from .copilot_chat_service import CopilotChatService
@@ -392,7 +393,9 @@ def copilot_chat(request):
         }
     """
     user_message = request.data.get('message')
-    session_id = request.data.get('session_id', 'default')
+    # Mint a unique session id when the client doesn't supply one so users
+    # don't accidentally share Copilot conversation state on the server.
+    session_id = request.data.get('session_id') or uuid.uuid4().hex
     
     if not user_message:
         return Response({'error': 'message is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -442,7 +445,9 @@ def copilot_chat_stream(request):
         }
     """
     user_message = request.data.get('message')
-    session_id = request.data.get('session_id', 'default')
+    # Mint a unique session id when the client doesn't supply one so users
+    # don't accidentally share Copilot conversation state on the server.
+    session_id = request.data.get('session_id') or uuid.uuid4().hex
     
     if not user_message:
         return Response({'error': 'message is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -457,7 +462,9 @@ def copilot_chat_stream(request):
                 yield chunk
         except Exception as e:
             logger.error(f"Error in copilot_chat_stream: {str(e)}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            # Surface the session id so the frontend can persist it even on
+            # error responses.
+            yield f"data: {json.dumps({'error': str(e), 'session_id': session_id})}\n\n"
     
     response = StreamingHttpResponse(
         event_stream(),

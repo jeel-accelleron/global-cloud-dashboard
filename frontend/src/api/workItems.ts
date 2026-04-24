@@ -78,7 +78,7 @@ export async function recentlyUpdated(days = 7, top = 100): Promise<WorkItem[]> 
 export async function health(): Promise<boolean> {
   try {
     const { data } = await api.get('/health/');
-    return data?.status === 'ok' || data?.status === 'healthy' || true;
+    return data?.status === 'ok' || data?.status === 'healthy';
   } catch {
     return false;
   }
