@@ -1,34 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import type { WorkItem, WorkItemFilters } from '../api/types';
 import { listWorkItems } from '../api/workItems';
 
+/**
+ * React-Query backed work-items hook. Keeps the legacy shape
+ * (`{ data, loading, error, refetch }`) so existing pages don't change,
+ * adds `dataUpdatedAt` for the "refreshed Xm ago" indicator and benefits
+ * from the shared cache (route switches no longer re-fetch).
+ */
 export function useWorkItems(filters: WorkItemFilters = {}) {
-  const [data, setData] = useState<WorkItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const filtersRef = useRef(filters);
-  filtersRef.current = filters;
-
-  const refetch = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const items = await listWorkItems(filtersRef.current);
-      setData(items);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load work items');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Serialize filters to a primitive so the dependency array stays stable
-  // even when callers pass a new object literal each render. This keeps
-  // react-hooks/exhaustive-deps satisfied without disabling the rule.
-  const filtersKey = JSON.stringify(filters);
-  useEffect(() => {
-    refetch();
-  }, [filtersKey, refetch]);
-
-  return { data, loading, error, refetch };
+  const q = useQuery({
+    queryKey: ['workItems', filters],
+    queryFn: () => listWorkItems(filters),
+    placeholderData: (prev) => prev,
+  });
+  return {
+    data: (q.data ?? []) as WorkItem[],
+    loading: q.isLoading,
+    fetching: q.isFetching,
+    error: q.error ? (q.error as Error).message : null,
+    refetch: () => q.refetch(),
+    dataUpdatedAt: q.dataUpdatedAt,
+  };
 }

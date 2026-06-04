@@ -10,6 +10,7 @@ import ProjectDetail from './pages/ProjectDetail';
 import PBIs from './pages/PBIs';
 import Tasks from './pages/Tasks';
 import MissingComponents from './pages/MissingComponents';
+import MyWork from './pages/MyWork';
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
       <Route element={<AppLayout />}>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/my" element={<MyWork />} />
         <Route path="/projects" element={<Projects />} />
         <Route path="/projects/:id" element={<ProjectDetail />} />
         <Route path="/pbis" element={<PBIs />} />

@@ -10,6 +10,8 @@ from .views import (
     CustomWIQLQueryView,
     WorkItemHierarchyView,
     health_check,
+    team_info,
+    project_activity,
     copilot_chat,
     copilot_chat_stream,
     clear_chat_session
@@ -20,6 +22,12 @@ app_name = 'workitems'
 urlpatterns = [
     # Health check
     path('health/', health_check, name='health-check'),
+
+    # Team info
+    path('team/', team_info, name='team-info'),
+
+    # Project activity
+    path('projects/activity/', project_activity, name='project-activity'),
     
     # Work item endpoints
     path('', WorkItemListView.as_view(), name='work-item-list'),

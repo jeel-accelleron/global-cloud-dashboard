@@ -380,6 +380,80 @@ def health_check(request):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@api_view(['GET'])
+def team_info(request):
+    """
+    Get information about the project's team (admins + members).
+
+    GET /api/workitems/team/?team=<optional team name>
+    """
+    try:
+        team_name = request.query_params.get('team') or None
+        ado_service = AzureDevOpsService()
+        return Response(
+            ado_service.get_team_info(team_name=team_name),
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in team_info: {str(e)}")
+        return Response(
+            {'error': 'Failed to fetch team info', 'details': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+def project_activity(request):
+    """
+    Per-Feature activity over a time window.
+
+    GET /api/workitems/projects/activity/?range=month
+        range = week | month | quarter | half | year
+    """
+    from datetime import datetime, timedelta, timezone
+
+    range_key = (request.query_params.get('range') or 'month').lower()
+    now = datetime.now(timezone.utc)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if range_key == 'week':
+        start = today - timedelta(days=(today.weekday()))  # Monday
+        bucket = 'day'
+    elif range_key == 'quarter':
+        q_start_month = ((today.month - 1) // 3) * 3 + 1
+        start = today.replace(month=q_start_month, day=1)
+        bucket = 'month'
+    elif range_key == 'half':
+        h_start_month = 1 if today.month <= 6 else 7
+        start = today.replace(month=h_start_month, day=1)
+        bucket = 'month'
+    elif range_key == 'year':
+        start = today.replace(month=1, day=1)
+        bucket = 'month'
+    else:  # month (default)
+        start = today.replace(day=1)
+        bucket = 'day'
+
+    try:
+        ado_service = AzureDevOpsService()
+        bucket_override = (request.query_params.get('bucket') or '').lower()
+        if bucket_override in ('day', 'week', 'month'):
+            bucket = bucket_override
+        result = ado_service.get_project_activity(
+            start_iso=start.strftime('%Y-%m-%d'),
+            bucket=bucket,
+        )
+        result['range'] = range_key
+        result['bucket'] = bucket
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in project_activity: {str(e)}")
+        return Response(
+            {'error': 'Failed to compute project activity', 'details': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
 @csrf_exempt
 @api_view(['POST'])
 def copilot_chat(request):

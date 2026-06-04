@@ -12,14 +12,18 @@ export function ChartContainer({
   title: ReactNode;
   description?: ReactNode;
   action?: ReactNode;
+  /** Minimum chart height. The chart will grow to fill its parent card. */
   height?: number;
   children: ReactNode;
 }) {
   return (
-    <Card>
+    <Card className="flex h-full flex-col">
       <CardHeader title={title} description={description} action={action} />
-      <CardBody>
-        <div style={{ width: '100%', height }}>
+      <CardBody className="flex-1">
+        <div
+          className="h-full w-full"
+          style={{ minHeight: height }}
+        >
           <ResponsiveContainer width="100%" height="100%">
             {children as any}
           </ResponsiveContainer>

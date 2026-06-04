@@ -10,9 +10,18 @@ export function isActive(w: WorkItem) {
   return ACTIVE_STATES.has(w.state);
 }
 export function isOverdue(w: WorkItem) {
-  if (!w.dueDate || isClosed(w)) return false;
-  const due = new Date(w.dueDate).getTime();
-  return !Number.isNaN(due) && due < Date.now();
+  if (isClosed(w)) return false;
+  // ADO items rarely populate DueDate; fall back to TargetDate / FinishDate
+  // so the dashboard matches the Missing Components "overdue" bucket.
+  const candidates = [w.dueDate, w.targetDate, w.finishDate];
+  let earliest: number | null = null;
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const t = new Date(raw).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (earliest === null || t < earliest) earliest = t;
+  }
+  return earliest !== null && earliest < Date.now();
 }
 
 export interface CountByKey {

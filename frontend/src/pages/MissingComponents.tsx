@@ -17,7 +17,7 @@ import {
   FileQuestion,
   Flag,
   UserX,
-} from 'lucide-react';
+} from '../components/icons';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Card, CardBody, CardHeader } from '../components/ui/Card';
 import { ChartContainer } from '../components/ui/ChartContainer';

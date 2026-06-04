@@ -35,6 +35,7 @@ class AzureDevOpsService:
                 creds=credentials
             )
             self.wit_client = self.connection.clients.get_work_item_tracking_client()
+            self.core_client = self.connection.clients.get_core_client()
             self.project = AZURE_DEVOPS_PROJECT
             self.default_area_path = DEFAULT_AREA_PATH
             logger.info(f"Successfully connected to Azure DevOps: {AZURE_DEVOPS_ORG_URL}")
@@ -310,3 +311,278 @@ class AzureDevOpsService:
                 for rel in (work_item.relations or [])
             ] if hasattr(work_item, 'relations') and work_item.relations else []
         }
+
+    def get_team_info(self, team_name: Optional[str] = None) -> Dict:
+        """
+        Get information about a team in the configured project.
+
+        Args:
+            team_name: Name of the team. Defaults to the project's default team
+                (named "<project> Team" by Azure DevOps convention).
+
+        Returns:
+            {
+                'project': {'name', 'description'},
+                'team': {'name', 'description'},
+                'admins': [{'displayName', 'uniqueName', 'imageUrl'}],
+                'members': [{'displayName', 'uniqueName', 'imageUrl'}],
+            }
+        """
+        try:
+            project = self.core_client.get_project(self.project)
+            project_id = project.id
+
+            target_team_name = team_name or "Cloud Operations"
+
+            team = None
+            try:
+                team = self.core_client.get_team(project_id, target_team_name)
+            except Exception:
+                # Fallback: pick the first team in the project.
+                teams = self.core_client.get_teams(project_id, top=1) or []
+                team = teams[0] if teams else None
+
+            if team is None:
+                return {
+                    'project': {
+                        'name': project.name,
+                        'description': getattr(project, 'description', '') or '',
+                    },
+                    'team': None,
+                    'admins': [],
+                    'members': [],
+                }
+
+            members_raw = self.core_client.get_team_members_with_extended_properties(
+                project_id, team.id
+            ) or []
+
+            def _serialize(identity) -> Dict:
+                return {
+                    'displayName': getattr(identity, 'display_name', None),
+                    'uniqueName': getattr(identity, 'unique_name', None),
+                    'imageUrl': getattr(identity, 'image_url', None),
+                }
+
+            admins: List[Dict] = []
+            members: List[Dict] = []
+            for m in members_raw:
+                identity = getattr(m, 'identity', None)
+                if identity is None:
+                    continue
+                payload = _serialize(identity)
+                if getattr(m, 'is_team_admin', False):
+                    admins.append(payload)
+                else:
+                    members.append(payload)
+
+            return {
+                'project': {
+                    'name': project.name,
+                    'description': getattr(project, 'description', '') or '',
+                },
+                'team': {
+                    'id': team.id,
+                    'name': team.name,
+                    'description': getattr(team, 'description', '') or '',
+                },
+                'admins': admins,
+                'members': members,
+            }
+        except Exception as e:
+            logger.error(f"Error getting team info: {str(e)}")
+            raise
+
+    def get_project_activity(
+        self,
+        start_iso: str,
+        bucket: str = 'day',
+    ) -> Dict:
+        """
+        Compute activity per Feature (project) by walking the parent chain of
+        every item in the configured area.
+
+        For each item in the Cloud area whose ChangedDate >= start_iso, walk
+        System.Parent until a Feature ancestor is found and bucket the
+        ChangedDate under that feature.
+
+        Args:
+            start_iso: ISO date (YYYY-MM-DD) to filter ChangedDate.
+            bucket: 'day' or 'month'.
+
+        Returns:
+            {
+                'projects': [
+                    {'id', 'name', 'state', 'total', 'series': [{'date', 'count'}]},
+                    ...
+                ],
+                'buckets': ['2026-04-01', ...]   # ordered list of bucket keys
+            }
+        """
+        from datetime import datetime, timezone
+
+        # 1. Pull the IDs of every item changed since start_iso in the area.
+        wiql = (
+            "SELECT [System.Id] FROM WorkItems "
+            f"WHERE {get_base_wiql_condition(self.project, self.default_area_path)} "
+            f"AND [System.ChangedDate] >= '{start_iso}'"
+        )
+        query_result = self.wit_client.query_by_wiql({'query': wiql})
+        ids = [w.id for w in (query_result.work_items or [])]
+        if not ids:
+            return {'projects': [], 'buckets': []}
+
+        # 2. Fetch slim payloads for those items (id, type, parent, changed).
+        fields = [
+            'System.Id',
+            'System.Title',
+            'System.WorkItemType',
+            'System.State',
+            'System.Parent',
+            'System.ChangedDate',
+        ]
+        items: List[Dict] = []
+        for i in range(0, len(ids), 200):
+            batch = ids[i:i + 200]
+            items.extend(self.get_work_items(ids=batch, fields=fields))
+
+        # 3. Build a parent map from the items we already fetched.
+        parent_of: Dict[int, Optional[int]] = {}
+        type_of: Dict[int, str] = {}
+        for it in items:
+            f = it.get('fields', {}) or {}
+            wid = it.get('id')
+            if wid is None:
+                continue
+            parent_of[wid] = f.get('System.Parent')
+            type_of[wid] = f.get('System.WorkItemType') or ''
+
+        # 4. Some parents (Features) may not be in the changed set; fetch them
+        # so we can resolve types when walking the chain.
+        missing_parents = {
+            pid for pid in parent_of.values()
+            if pid is not None and pid not in type_of
+        }
+        if missing_parents:
+            extra: List[Dict] = []
+            ids_list = list(missing_parents)
+            for i in range(0, len(ids_list), 200):
+                batch = ids_list[i:i + 200]
+                extra.extend(self.get_work_items(ids=batch, fields=fields))
+            for it in extra:
+                f = it.get('fields', {}) or {}
+                wid = it.get('id')
+                if wid is None:
+                    continue
+                parent_of.setdefault(wid, f.get('System.Parent'))
+                type_of[wid] = f.get('System.WorkItemType') or ''
+
+        # 5. Walk parent chain for each item until we find a Feature.
+        FEATURE = 'Feature'
+        feature_cache: Dict[int, Optional[int]] = {}
+
+        def find_feature(wid: int) -> Optional[int]:
+            if wid in feature_cache:
+                return feature_cache[wid]
+            seen = set()
+            cur: Optional[int] = wid
+            while cur is not None and cur not in seen:
+                seen.add(cur)
+                if type_of.get(cur) == FEATURE:
+                    for s in seen:
+                        feature_cache[s] = cur
+                    return cur
+                cur = parent_of.get(cur)
+            for s in seen:
+                feature_cache[s] = None
+            return None
+
+        # 6. Bucket helper.
+        def to_bucket(iso_date: str) -> Optional[str]:
+            try:
+                dt = datetime.fromisoformat(iso_date.replace('Z', '+00:00'))
+            except ValueError:
+                return None
+            dt = dt.astimezone(timezone.utc)
+            if bucket == 'month':
+                return dt.strftime('%Y-%m')
+            if bucket == 'week':
+                iso_year, iso_week, _ = dt.isocalendar()
+                return f"{iso_year}-W{iso_week:02d}"
+            return dt.strftime('%Y-%m-%d')
+
+        # 7. Aggregate.
+        per_feature: Dict[int, Dict] = {}
+        all_buckets: set = set()
+        for it in items:
+            wid = it.get('id')
+            if wid is None:
+                continue
+            feat_id = find_feature(wid)
+            if feat_id is None:
+                continue
+            f = it.get('fields', {}) or {}
+            changed = f.get('System.ChangedDate')
+            if not changed:
+                continue
+            key = to_bucket(changed)
+            if key is None:
+                continue
+            all_buckets.add(key)
+            entry = per_feature.setdefault(feat_id, {
+                'id': feat_id,
+                'name': None,
+                'state': None,
+                'total': 0,
+                'series': {},
+            })
+            entry['total'] += 1
+            entry['series'][key] = entry['series'].get(key, 0) + 1
+
+        # 8. Backfill feature names/state from the items we have, falling back
+        # to a fetch if needed.
+        unknown = [fid for fid in per_feature if per_feature[fid]['name'] is None]
+        feature_meta_ids = [fid for fid in unknown]
+        # Try to populate from already-fetched items.
+        item_by_id = {it.get('id'): it for it in items}
+        still_missing = []
+        for fid in feature_meta_ids:
+            it = item_by_id.get(fid)
+            if it:
+                f = it.get('fields', {}) or {}
+                per_feature[fid]['name'] = f.get('System.Title') or f'Feature #{fid}'
+                per_feature[fid]['state'] = f.get('System.State')
+            else:
+                still_missing.append(fid)
+        if still_missing:
+            extra: List[Dict] = []
+            for i in range(0, len(still_missing), 200):
+                batch = still_missing[i:i + 200]
+                extra.extend(self.get_work_items(
+                    ids=batch,
+                    fields=['System.Id', 'System.Title', 'System.State'],
+                ))
+            for it in extra:
+                fid = it.get('id')
+                f = it.get('fields', {}) or {}
+                if fid in per_feature:
+                    per_feature[fid]['name'] = f.get('System.Title') or f'Feature #{fid}'
+                    per_feature[fid]['state'] = f.get('System.State')
+
+        ordered_buckets = sorted(all_buckets)
+        projects = []
+        for entry in per_feature.values():
+            series_map = entry['series']
+            series = [
+                {'date': b, 'count': series_map.get(b, 0)}
+                for b in ordered_buckets
+            ]
+            projects.append({
+                'id': entry['id'],
+                'name': entry['name'] or f"Feature #{entry['id']}",
+                'state': entry['state'],
+                'total': entry['total'],
+                'series': series,
+            })
+        projects.sort(key=lambda p: p['total'], reverse=True)
+        return {'projects': projects, 'buckets': ordered_buckets}

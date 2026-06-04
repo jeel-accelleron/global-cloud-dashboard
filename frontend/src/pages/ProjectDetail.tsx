@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink } from '../components/icons';
 import {
   Bar,
   BarChart,

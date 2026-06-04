@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { CheckCircle2, AlertCircle, X, Info } from 'lucide-react';
+import { CheckCircle2, AlertCircle, X, Info } from '../icons';
 import { cn } from '../../lib/utils';
 
 type ToastType = 'success' | 'error' | 'info';

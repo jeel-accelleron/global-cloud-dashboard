@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Inbox } from 'lucide-react';
+import { Inbox } from '../icons';
 
 export function EmptyState({
   title = 'Nothing to show',

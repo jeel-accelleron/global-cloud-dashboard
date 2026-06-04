@@ -36,6 +36,7 @@ export default {
           'Roboto',
           'sans-serif',
         ],
+        display: ['"Gloock"', 'ui-serif', 'Georgia', 'serif'],
       },
     },
   },

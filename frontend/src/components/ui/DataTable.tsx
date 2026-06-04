@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
+import { ChevronDown, ChevronUp, ChevronsUpDown } from '../icons';
 import { cn } from '../../lib/utils';
 import { EmptyState } from './EmptyState';
 

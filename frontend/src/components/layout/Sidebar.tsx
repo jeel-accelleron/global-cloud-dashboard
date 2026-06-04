@@ -11,11 +11,13 @@ import {
   ClipboardList,
   CheckSquare,
   AlertTriangle,
-} from 'lucide-react';
+  User2,
+} from '../icons';
 import { cn } from '../../lib/utils';
 
 const items = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/my', label: 'My Work', icon: User2 },
   { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/pbis', label: 'PBIs', icon: ClipboardList },
   { to: '/tasks', label: 'Tasks', icon: CheckSquare },

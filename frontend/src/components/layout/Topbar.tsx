@@ -1,12 +1,12 @@
 import { useNavigate } from 'react-router-dom';
-import { Search, Moon, Sun, Bell } from 'lucide-react';
+import { Search, Moon, Sun } from '../icons';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { useTheme } from '../../lib/theme';
-import { initials } from '../../lib/utils';
 import { useState } from 'react';
+import { UserMenu } from './UserMenu';
 
-export function Topbar() {
+export function Topbar({ onOpenPalette }: { onOpenPalette?: () => void }) {
   const { theme, toggle } = useTheme();
   const nav = useNavigate();
   const [q, setQ] = useState('');
@@ -26,19 +26,24 @@ export function Topbar() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           className="w-full"
+          rightSlot={
+            <button
+              type="button"
+              onClick={onOpenPalette}
+              className="hidden md:inline-flex items-center rounded border border-border bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-subtle hover:text-fg"
+              title="Open command palette (Ctrl+K)"
+            >
+              ⌘K
+            </button>
+          }
         />
       </form>
 
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-2">
         <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme">
           {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
         </Button>
-        <Button variant="ghost" size="icon" aria-label="Notifications">
-          <Bell size={16} />
-        </Button>
-        <div className="ml-1 flex h-9 w-9 items-center justify-center rounded-full bg-brand/10 text-xs font-semibold text-brand">
-          {initials('You')}
-        </div>
+        <UserMenu />
       </div>
     </header>
   );

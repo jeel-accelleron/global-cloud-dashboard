@@ -83,3 +83,50 @@ export async function health(): Promise<boolean> {
     return false;
   }
 }
+
+export interface TeamMember {
+  displayName: string | null;
+  uniqueName: string | null;
+  imageUrl: string | null;
+}
+
+export interface TeamInfo {
+  project: { name: string; description: string };
+  team: { id: string; name: string; description: string } | null;
+  admins: TeamMember[];
+  members: TeamMember[];
+}
+
+export async function getTeam(team?: string): Promise<TeamInfo> {
+  const { data } = await api.get<TeamInfo>('/team/', {
+    params: team ? { team } : undefined,
+  });
+  return data;
+}
+
+export type ActivityRange = 'week' | 'month' | 'quarter' | 'half' | 'year';
+
+export interface ProjectActivity {
+  id: number;
+  name: string;
+  state: string | null;
+  total: number;
+  series: { date: string; count: number }[];
+}
+
+export interface ProjectActivityResponse {
+  range: ActivityRange;
+  bucket: 'day' | 'week' | 'month';
+  buckets: string[];
+  projects: ProjectActivity[];
+}
+
+export async function getProjectActivity(
+  range: ActivityRange = 'month',
+  bucket?: 'day' | 'week' | 'month'
+): Promise<ProjectActivityResponse> {
+  const { data } = await api.get<ProjectActivityResponse>('/projects/activity/', {
+    params: bucket ? { range, bucket } : { range },
+  });
+  return data;
+}

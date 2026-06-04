@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Sparkles, Send, Trash2, Square, User2 } from 'lucide-react';
+import { Sparkles, Send, Trash2, Square, User2 } from '../components/icons';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { PageHeader } from '../components/layout/PageHeader';
